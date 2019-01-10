@@ -10,9 +10,9 @@
 # EDIT this section to Select Versions #
 ########################################
 
-OPENSSL="1.0.2p"
-LIBCURL="7.62.0"
-NGHTTP2="1.34.0"
+OPENSSL="1.1.1a"
+LIBCURL="7.63.0"
+NGHTTP2="1.35.1"
 
 ########################################
 
@@ -81,6 +81,6 @@ echo "Archiving Mac binaries for curl and openssl..."
 mv /tmp/curl $ARCHIVE
 mv /tmp/openssl $ARCHIVE
 curl https://curl.haxx.se/ca/cacert.pem > $ARCHIVE/cacert.pem
-$ARCHIVE/curl -V
+#$ARCHIVE/curl -V
 
 rm -f $NOHTTP2

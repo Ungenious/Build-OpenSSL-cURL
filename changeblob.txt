@@ -1,0 +1,48 @@
+//
+//  changeblob.txt
+//  OpenSSL, nghttp2, and cURL for macOS/iOS/tvOS
+//
+//  Created by brain on 1/8/19
+//  Copyright © 2018 brain. All rights reserved.
+//
+
+= Update all minimum versions for tvOS/iOS/Packages
+= Comment out armv7, armv7s, and i386-simulator targets
+= Note: tvOS/simulator builds break when setting -mxxx-version-min == "12.0"
+
+OpenSSL:
+- Update default version to 1.1.1a
+- Add sed for ocsp.c to comment out define OCSP_DAEMON (which uses fork)
+- Copy 15-tvos.conf (copied and edited from 15-ios.conf)
+- Use tvos64-xcrun instead of iphone-cross and use tvossimulator-xcrun for simulator
+- Remove bitcode for macOS
+- Remove darwin-x86_64 line for tvossimulator
+- Fix sed for CFLAGS
+- Change --openssldir to --prefix
+- Add CLANG_VERSION_FLAG
+- Add no-shared to Configure options
+- Add -j8 to make
+- Add macOS suffix to mac builds
+- Copy headers specific to each platform
+
+NGHTTP2:
+- Update default version to 1.35.1
+- Fix copy/pasta error CURL_VERSION to NGHTTP2_VERSION
+- Fix copy/pasta from cURL build, remove -L{OPENSSL}/tvOS/lib ${NGHTTP2LIB}
+- Remove LDFlags completely
+- Set OPENSSL_LIBS
+- Add CLANG_VERSION_FLAG
+- Use dwarf-4
+- Add -j8 to make
+- Note: Cannot have spaces in prefix directory
+- Note: --enable-lib-only implies --disable-app
+
+cURL:
+- Update default version to 7.63.0
+- Add CLANG_VERSION_FLAG
+- Use dwarf-4
+- Replace configure's *-version-min test
+old:
+    grep m.*os.*-version-min
+new:
+    grep -- "-m.*[os|simulator].*-version-min"

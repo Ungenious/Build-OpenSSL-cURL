@@ -31,24 +31,24 @@ fi
 
 if [ -z $2 ]; then
 	IOS_SDK_VERSION="" #"9.1"
-	IOS_MIN_SDK_VERSION="7.1"
+	IOS_MIN_SDK_VERSION="11.0"
 	
 	TVOS_SDK_VERSION="" #"9.0"
-	TVOS_MIN_SDK_VERSION="9.0"
+	TVOS_MIN_SDK_VERSION="11.0"
 else
 	IOS_SDK_VERSION=$2
 	TVOS_SDK_VERSION=$3
 fi
 
 if [ -z $1 ]; then
-	CURL_VERSION="curl-7.50.1"
+	CURL_VERSION="curl-7.63.0"
 else
 	CURL_VERSION="curl-$1"
 fi
 
 OPENSSL="${PWD}/../openssl"  
 DEVELOPER=`xcode-select -print-path`
-IPHONEOS_DEPLOYMENT_TARGET="6.0"
+IPHONEOS_DEPLOYMENT_TARGET="11.2"
 
 # HTTP2 support
 NOHTTP2="/tmp/no-http2"
@@ -64,6 +64,10 @@ else
 	NGHTTP2CFG=""
 	NGHTTP2LIB=""
 fi
+
+# configure version test fix
+OLD_VERSION_TEST="grep m\.\*os\.\*\-version\-min"
+NEW_VERSION_TEST="grep \-\- \"\-m\.\*\[os\|simulator\]\.\*\-version\-min\""
 
 buildMac()
 {
@@ -84,7 +88,7 @@ buildMac()
 	fi
 	
 	export CC="${BUILD_TOOLS}/usr/bin/clang"
-	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -fembed-bitcode"
+	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-4 -fembed-bitcode"
 	export LDFLAGS="-arch ${ARCH} -L${OPENSSL}/Mac/lib ${NGHTTP2LIB}"
 	pushd . > /dev/null
 	cd "${CURL_VERSION}"
@@ -108,8 +112,10 @@ buildIOS()
   
 	if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]]; then
 		PLATFORM="iPhoneSimulator"
+		CLANG_VERSION_FLAG="-miphonesimulator-version-min"
 	else
 		PLATFORM="iPhoneOS"
+		CLANG_VERSION_FLAG="-miphoneos-version-min"
 	fi
 
 	if [[ "${BITCODE}" == "nobitcode" ]]; then
@@ -128,15 +134,20 @@ buildIOS()
 	export CROSS_SDK="${PLATFORM}${IOS_SDK_VERSION}.sdk"
 	export BUILD_TOOLS="${DEVELOPER}"
 	export CC="${BUILD_TOOLS}/usr/bin/gcc"
-	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${IOS_MIN_SDK_VERSION} ${CC_BITCODE_FLAG}"
+	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-4 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} ${CLANG_VERSION_FLAG}=${IOS_MIN_SDK_VERSION} ${CC_BITCODE_FLAG}"
+	export CPPFLAGS="-DOPENSSL_NO_ENGINE"
 	export LDFLAGS="-arch ${ARCH} -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -L${OPENSSL}/iOS/lib ${NGHTTP2LIB}"
    
 	echo "Building ${CURL_VERSION} for ${PLATFORM} ${IOS_SDK_VERSION} ${ARCH} ${BITCODE}"
 
+	# Fixup minimum version test for simulators
+	LANG=C sed -i -- "s|$OLD_VERSION_TEST|$NEW_VERSION_TEST|" "./configure"
+	chmod u+x ./configure
+
 	if [[ "${ARCH}" == "arm64" ]]; then
-		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" -disable-shared --enable-static -with-random=/dev/urandom --with-ssl=${OPENSSL}/iOS ${NGHTTP2CFG} --host="arm-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
+		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" -disable-shared --enable-static -with-random=/dev/urandom --with-ssl="${OPENSSL}/iOS" ${NGHTTP2CFG} --host="arm-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
 	else
-		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" -disable-shared --enable-static -with-random=/dev/urandom --with-ssl=${OPENSSL}/iOS ${NGHTTP2CFG} --host="${ARCH}-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
+		./configure -prefix="/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}" -disable-shared --enable-static -with-random=/dev/urandom --with-ssl="${OPENSSL}/iOS" ${NGHTTP2CFG} --host="${ARCH}-apple-darwin" &> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log"
 	fi
 
 	make -j8 >> "/tmp/${CURL_VERSION}-iOS-${ARCH}-${BITCODE}.log" 2>&1
@@ -154,8 +165,10 @@ buildTVOS()
   
 	if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]]; then
 		PLATFORM="AppleTVSimulator"
+		CLANG_VERSION_FLAG="-mappletvsimulator-version-min"
 	else
 		PLATFORM="AppleTVOS"
+		CLANG_VERSION_FLAG="-mtvos-version-min"
 	fi
 	
 	if [ ! -z "$NGHTTP2" ]; then 
@@ -168,17 +181,26 @@ buildTVOS()
 	export CROSS_SDK="${PLATFORM}${TVOS_SDK_VERSION}.sdk"
 	export BUILD_TOOLS="${DEVELOPER}"
 	export CC="${BUILD_TOOLS}/usr/bin/gcc"
-	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-2 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${TVOS_MIN_SDK_VERSION} -fembed-bitcode"
+	export CFLAGS="-arch ${ARCH} -pipe -Os -gdwarf-4 -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} ${CLANG_VERSION_FLAG}=${TVOS_MIN_SDK_VERSION} -fembed-bitcode"
+	export CPPFLAGS="-DOPENSSL_NO_ENGINE"
 	export LDFLAGS="-arch ${ARCH} -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -L${OPENSSL}/tvOS/lib ${NGHTTP2LIB}"
 #	export PKG_CONFIG_PATH 
    
 	echo "Building ${CURL_VERSION} for ${PLATFORM} ${TVOS_SDK_VERSION} ${ARCH}"
 
-	./configure -prefix="/tmp/${CURL_VERSION}-tvOS-${ARCH}" --host="arm-apple-darwin" -disable-shared -with-random=/dev/urandom --disable-ntlm-wb --with-ssl="${OPENSSL}/tvOS" ${NGHTTP2CFG} &> "/tmp/${CURL_VERSION}-tvOS-${ARCH}.log"
+	# Fixup minimum version test for simulators
+	LANG=C sed -i -- "s|$OLD_VERSION_TEST|$NEW_VERSION_TEST|" "./configure"
+	chmod u+x ./configure
+
+	if [[ "${ARCH}" == "arm64" ]]; then
+		./configure -prefix="/tmp/${CURL_VERSION}-tvOS-${ARCH}" --host="arm-apple-darwin" -disable-shared --enable-static -with-random=/dev/urandom --disable-ntlm-wb --with-ssl="${OPENSSL}/tvOS" ${NGHTTP2CFG} &> "/tmp/${CURL_VERSION}-tvOS-${ARCH}.log"
+	else
+		./configure -prefix="/tmp/${CURL_VERSION}-tvOS-${ARCH}" --host="${ARCH}-apple-darwin" -disable-shared --enable-static -with-random=/dev/urandom --disable-ntlm-wb --with-ssl="${OPENSSL}/tvOS" ${NGHTTP2CFG} &> "/tmp/${CURL_VERSION}-tvOS-${ARCH}.log"
+	fi
 
 	# Patch to not use fork() since it's not available on tvOS
-        LANG=C sed -i -- 's/define HAVE_FORK 1/define HAVE_FORK 0/' "./lib/curl_config.h"
-        LANG=C sed -i -- 's/HAVE_FORK"]=" 1"/HAVE_FORK\"]=" 0"/' "config.status"
+    LANG=C sed -i -- 's/define HAVE_FORK 1/define HAVE_FORK 0/' "./lib/curl_config.h"
+    LANG=C sed -i -- 's/HAVE_FORK"]=" 1"/HAVE_FORK\"]=" 0"/' "config.status"
 
 	make -j8 >> "/tmp/${CURL_VERSION}-tvOS-${ARCH}.log" 2>&1
 	make install >> "/tmp/${CURL_VERSION}-tvOS-${ARCH}.log" 2>&1
@@ -218,31 +240,25 @@ lipo \
 	-create -output lib/libcurl_Mac.a
 
 echo "Building iOS libraries (bitcode)"
-buildIOS "armv7" "bitcode"
-buildIOS "armv7s" "bitcode"
 buildIOS "arm64" "bitcode"
 buildIOS "x86_64" "bitcode"
-buildIOS "i386" "bitcode"
+# buildIOS "armv7" "bitcode"
+# buildIOS "armv7s" "bitcode"
+# buildIOS "i386" "bitcode"
 
 lipo \
-	"/tmp/${CURL_VERSION}-iOS-armv7-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-armv7s-bitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-i386-bitcode/lib/libcurl.a" \
 	"/tmp/${CURL_VERSION}-iOS-arm64-bitcode/lib/libcurl.a" \
 	"/tmp/${CURL_VERSION}-iOS-x86_64-bitcode/lib/libcurl.a" \
 	-create -output lib/libcurl_iOS.a
 
 echo "Building iOS libraries (nobitcode)"
-buildIOS "armv7" "nobitcode"
-buildIOS "armv7s" "nobitcode"
 buildIOS "arm64" "nobitcode"
 buildIOS "x86_64" "nobitcode"
-buildIOS "i386" "nobitcode"
+# buildIOS "armv7" "nobitcode"
+# buildIOS "armv7s" "nobitcode"
+# buildIOS "i386" "nobitcode"
 
 lipo \
-	"/tmp/${CURL_VERSION}-iOS-armv7-nobitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-armv7s-nobitcode/lib/libcurl.a" \
-	"/tmp/${CURL_VERSION}-iOS-i386-nobitcode/lib/libcurl.a" \
 	"/tmp/${CURL_VERSION}-iOS-arm64-nobitcode/lib/libcurl.a" \
 	"/tmp/${CURL_VERSION}-iOS-x86_64-nobitcode/lib/libcurl.a" \
 	-create -output lib/libcurl_iOS_nobitcode.a

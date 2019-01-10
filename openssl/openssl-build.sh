@@ -33,17 +33,17 @@ fi
 
 if [ -z $2 ]; then
 	IOS_SDK_VERSION="" #"9.1"
-	IOS_MIN_SDK_VERSION="7.1"
+	IOS_MIN_SDK_VERSION="11.0"
 
 	TVOS_SDK_VERSION="" #"9.0"
-	TVOS_MIN_SDK_VERSION="9.0"
+	TVOS_MIN_SDK_VERSION="11.0"
 else
 	IOS_SDK_VERSION=$2
 	TVOS_SDK_VERSION=$3
 fi
 
 if [ -z $1 ]; then
-	OPENSSL_VERSION="openssl-1.0.1t"
+	OPENSSL_VERSION="openssl-1.1.1a"
 else
 	OPENSSL_VERSION="openssl-$1"
 fi
@@ -53,8 +53,9 @@ DEVELOPER=`xcode-select -print-path`
 buildMac()
 {
 	ARCH=$1
+	PLATFORM="macOS"
 
-	echo "Building ${OPENSSL_VERSION} for ${ARCH}"
+	echo "Building ${OPENSSL_VERSION} for ${PLATFORM} for ${ARCH}"
 
 	TARGET="darwin-i386-cc"
 
@@ -62,50 +63,60 @@ buildMac()
 		TARGET="darwin64-x86_64-cc"
 	fi
 
-	export CC="${BUILD_TOOLS}/usr/bin/clang -fembed-bitcode"
+	export CC="${BUILD_TOOLS}/usr/bin/clang"
 
 	pushd . > /dev/null
 	cd "${OPENSSL_VERSION}"
-	./Configure no-asm ${TARGET} --openssldir="/tmp/${OPENSSL_VERSION}-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-${ARCH}.log"
-	make >> "/tmp/${OPENSSL_VERSION}-${ARCH}.log" 2>&1
-	make install_sw >> "/tmp/${OPENSSL_VERSION}-${ARCH}.log" 2>&1
+	./Configure no-asm ${TARGET} --prefix="/tmp/${OPENSSL_VERSION}-${PLATFORM}-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-${PLATFORM}-${ARCH}.log"
+	make -j8 >> "/tmp/${OPENSSL_VERSION}-${PLATFORM}-${ARCH}.log" 2>&1
+	make install_sw >> "/tmp/${OPENSSL_VERSION}-${PLATFORM}-${ARCH}.log" 2>&1
 	# Keep openssl binary for Mac version
-	cp "/tmp/${OPENSSL_VERSION}-${ARCH}/bin/openssl" "/tmp/openssl"
-	make clean >> "/tmp/${OPENSSL_VERSION}-${ARCH}.log" 2>&1
+	cp "/tmp/${OPENSSL_VERSION}-${PLATFORM}-${ARCH}/bin/openssl" "/tmp/openssl"
+	make clean >> "/tmp/${OPENSSL_VERSION}-${PLATFORM}-${ARCH}.log" 2>&1	
 	popd > /dev/null
 }
 
 buildIOS()
 {
 	ARCH=$1
+	BITCODE=$2
 
 	pushd . > /dev/null
 	cd "${OPENSSL_VERSION}"
 
 	if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]]; then
 		PLATFORM="iPhoneSimulator"
+		CLANG_VERSION_FLAG="-miphonesimulator-version-min"
 	else
 		PLATFORM="iPhoneOS"
+		CLANG_VERSION_FLAG="-miphoneos-version-min"
 		sed -ie "s!static volatile sig_atomic_t intr_signal;!static volatile intr_signal;!" "crypto/ui/ui_openssl.c"
 	fi
+
+    if [[ "${BITCODE}" == "nobitcode" ]]; then
+            CC_BITCODE_FLAG=""
+    else
+            CC_BITCODE_FLAG="-fembed-bitcode"
+    fi
 
 	export $PLATFORM
 	export CROSS_TOP="${DEVELOPER}/Platforms/${PLATFORM}.platform/Developer"
 	export CROSS_SDK="${PLATFORM}${IOS_SDK_VERSION}.sdk"
 	export BUILD_TOOLS="${DEVELOPER}"
-	export CC="${BUILD_TOOLS}/usr/bin/gcc -fembed-bitcode -arch ${ARCH}"
+	export CC="${BUILD_TOOLS}/usr/bin/gcc -arch ${ARCH} ${CC_BITCODE_FLAG}"
 
 	echo "Building ${OPENSSL_VERSION} for ${PLATFORM} ${IOS_SDK_VERSION} ${ARCH}"
 
 	if [[ "${ARCH}" == "x86_64" ]]; then
-		./Configure no-asm darwin64-x86_64-cc --openssldir="/tmp/${OPENSSL_VERSION}-iOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log"
+		./Configure no-asm no-shared darwin64-x86_64-cc --prefix="/tmp/${OPENSSL_VERSION}-iOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log"
 	else
-		./Configure iphoneos-cross --openssldir="/tmp/${OPENSSL_VERSION}-iOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log"
+		./Configure ios64-xcrun no-shared --prefix="/tmp/${OPENSSL_VERSION}-iOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log"
 	fi
-	# add -isysroot to CC=
-	sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -miphoneos-version-min=${IOS_MIN_SDK_VERSION} !" "Makefile"
 
-	make >> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log" 2>&1
+	# add -isysroot to CC=
+	sed -ie "s|^CFLAGS=|CFLAGS= -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} ${CLANG_VERSION_FLAG}=${IOS_MIN_SDK_VERSION} |" "Makefile"	
+
+	make -j8 >> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log" 2>&1
 	make install_sw >> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log" 2>&1
 	make clean >> "/tmp/${OPENSSL_VERSION}-iOS-${ARCH}.log" 2>&1
 	popd > /dev/null
@@ -120,8 +131,10 @@ buildTVOS()
 
 	if [[ "${ARCH}" == "i386" || "${ARCH}" == "x86_64" ]]; then
 		PLATFORM="AppleTVSimulator"
+		CLANG_VERSION_FLAG="-mappletvsimulator-version-min"
 	else
 		PLATFORM="AppleTVOS"
+		CLANG_VERSION_FLAG="-mtvos-version-min"
 		sed -ie "s!static volatile sig_atomic_t intr_signal;!static volatile intr_signal;!" "crypto/ui/ui_openssl.c"
 	fi
 
@@ -137,19 +150,23 @@ buildTVOS()
 	# Patch apps/speed.c to not use fork() since it's not available on tvOS
 	LANG=C sed -i -- 's/define HAVE_FORK 1/define HAVE_FORK 0/' "./apps/speed.c"
 
+	# Patch apps/ocsp.c to not define OCSP_DAEMON which requires fork
+	LANG=C sed -i -- 's|#  define OCSP_DAEMON|\/\/&|' "./apps/ocsp.c"
+
 	# Patch Configure to build for tvOS, not iOS
 	LANG=C sed -i -- 's/D\_REENTRANT\:iOS/D\_REENTRANT\:tvOS/' "./Configure"
 	chmod u+x ./Configure
 
 	if [[ "${ARCH}" == "x86_64" ]]; then
-		./Configure no-asm darwin64-x86_64-cc --openssldir="/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log"
+		./Configure tvossimulator-xcrun no-shared no-asm --prefix="/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log"
 	else
-		./Configure iphoneos-cross --openssldir="/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log"
+		./Configure tvos64-xcrun no-shared --prefix="/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}" &> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log"
 	fi
-	# add -isysroot to CC=
-	sed -ie "s!^CFLAG=!CFLAG=-isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} -mtvos-version-min=${TVOS_MIN_SDK_VERSION} !" "Makefile"
+	
+	# add -isysroot to CC=	
+	sed -ie "s|^CFLAGS=|CFLAGS= -isysroot ${CROSS_TOP}/SDKs/${CROSS_SDK} ${CLANG_VERSION_FLAG}=${TVOS_MIN_SDK_VERSION} |" "Makefile"	
 
-	make >> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log" 2>&1
+	make -j8 >> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log" 2>&1	
 	make install_sw >> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log" 2>&1
 	make clean >> "/tmp/${OPENSSL_VERSION}-tvOS-${ARCH}.log" 2>&1
 	popd > /dev/null
@@ -185,45 +202,45 @@ echo "Building Mac libraries"
 buildMac "x86_64"
 
 echo "Copying headers"
-cp /tmp/${OPENSSL_VERSION}-x86_64/include/openssl/* Mac/include/openssl/
-cp /tmp/${OPENSSL_VERSION}-x86_64/include/openssl/* iOS/include/openssl/
-cp /tmp/${OPENSSL_VERSION}-x86_64/include/openssl/* tvOS/include/openssl/
+cp /tmp/${OPENSSL_VERSION}-macOS-x86_64/include/openssl/* Mac/include/openssl/
 
 lipo \
-	"/tmp/${OPENSSL_VERSION}-x86_64/lib/libcrypto.a" \
+	"/tmp/${OPENSSL_VERSION}-macOS-x86_64/lib/libcrypto.a" \
 	-create -output Mac/lib/libcrypto.a
 
 lipo \
-	"/tmp/${OPENSSL_VERSION}-x86_64/lib/libssl.a" \
+	"/tmp/${OPENSSL_VERSION}-macOS-x86_64/lib/libssl.a" \
 	-create -output Mac/lib/libssl.a
 
-echo "Building iOS libraries"
-buildIOS "armv7"
-buildIOS "armv7s"
-buildIOS "arm64"
-buildIOS "x86_64"
-buildIOS "i386"
+echo "Building iOS libraries (bitcode)"
+buildIOS "arm64" "bitcode"
+buildIOS "x86_64" "bitcode"
+# buildIOS "armv7" "nobitcode"
+# buildIOS "armv7s" "nobitcode"
+# buildIOS "i386" "bitcode"
+
+echo "Copying headers"
+cp /tmp/${OPENSSL_VERSION}-iOS-arm64/include/openssl/* iOS/include/openssl/
 
 lipo \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7s/lib/libcrypto.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-i386/lib/libcrypto.a" \
 	"/tmp/${OPENSSL_VERSION}-iOS-arm64/lib/libcrypto.a" \
 	"/tmp/${OPENSSL_VERSION}-iOS-x86_64/lib/libcrypto.a" \
 	-create -output iOS/lib/libcrypto.a
 
 lipo \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-armv7s/lib/libssl.a" \
-	"/tmp/${OPENSSL_VERSION}-iOS-i386/lib/libssl.a" \
 	"/tmp/${OPENSSL_VERSION}-iOS-arm64/lib/libssl.a" \
 	"/tmp/${OPENSSL_VERSION}-iOS-x86_64/lib/libssl.a" \
 	-create -output iOS/lib/libssl.a
 
+echo "Copying tvos conf file"
+cp "/Users/brain/Development/15-tvos.conf" "${OPENSSL_VERSION}/Configurations/"
 
 echo "Building tvOS libraries"
-buildTVOS "arm64"
 buildTVOS "x86_64"
+buildTVOS "arm64"
+
+echo "Copying headers"
+cp /tmp/${OPENSSL_VERSION}-tvOS-arm64/include/openssl/* tvOS/include/openssl/
 
 lipo \
 	"/tmp/${OPENSSL_VERSION}-tvOS-arm64/lib/libcrypto.a" \
